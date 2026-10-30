@@ -60,7 +60,7 @@ export const CLICKHOUSE_CLIENT_OVERLAY = {
   dialect: Object.freeze({
     catalogRead: "supported",
     planEstimate: "supported",
-    catalogCapture: "unsupported",
+    catalogCapture: "supported",
   } satisfies ClientDialectOf<(typeof CLICKHOUSE_SERVER_OVERLAY)["dialect"]>),
 } as const satisfies { dialect: ClientDialectOf<(typeof CLICKHOUSE_SERVER_OVERLAY)["dialect"]> };
 export const LIBSQL_CLIENT_OVERLAY = {

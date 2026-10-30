@@ -17,6 +17,7 @@ import {
   verifyAgentProfile,
 } from "@/lib/db/providers/sql/clickhouse/agent-boundary";
 import { type ClickHouseQueryResult, ClickHouseTransportError } from "@/lib/db/providers/sql/clickhouse/transport";
+import { agentRequestSettings } from "@/lib/db/providers/sql/clickhouse/agent-read";
 
 /**
  * `SELECT arrayStringConcat(groupArray(name), ',') FROM (SELECT name FROM system.table_engines ORDER BY name)` on
@@ -69,10 +70,16 @@ function leastPrivilege(): Record<string, Answer> {
     objects: result([], ["database", "name", "engine"]),
     dictionaries: refused(497),
     functions: result([], ["name", "origin"]),
+    settings: result(
+      Object.keys(agentRequestSettings({ statementTimeoutMs: 1000, maxResultRows: 1, maxResultBytes: 1 })).map(
+        (name) => ({ name, readonly: 1 }),
+      ),
+    ),
   };
 }
 
 function stepOf(sql: string): string {
+  if (sql.includes("FROM system.settings")) return "settings";
   if (sql.startsWith("SELECT version()")) return "identity";
   if (sql === "SELECT 1 SETTINGS readonly = 0") return "lowerReadonly";
   if (sql.startsWith("CREATE DATABASE IF NOT EXISTS")) return "write";
@@ -114,6 +121,15 @@ function grants(...lines: string[]): ClickHouseQueryResult {
 }
 
 describe("verifyAgentProfile admits", () => {
+  test("refuses a principal that can relax a query budget", async () => {
+    const base = server();
+    await expect(
+      verifyAgentProfile(async (sql) => {
+        if (sql.includes("FROM system.settings")) return result([{ name: "max_result_rows", readonly: 0 }]);
+        return base.query(sql);
+      }, "demo"),
+    ).rejects.toMatchObject({ reasonCode: "PROFILE_SERVER_UNENFORCED" });
+  });
   test("the least-privilege user, after every step in order", async () => {
     const { query, sent } = server();
     await verifyAgentProfile(query, "demo");
@@ -126,6 +142,7 @@ describe("verifyAgentProfile admits", () => {
       "objects",
       "dictionaries",
       "functions",
+      "settings",
     ]);
     expect(sent[2]).toBe("CREATE DATABASE IF NOT EXISTS `demo`");
   });

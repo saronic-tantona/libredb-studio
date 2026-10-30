@@ -4225,6 +4225,22 @@ const AGENT_PROFILE = { readOnly: true, sendsStatements: true };
 /** The open's proof as 26.7.1.1315 answered it for the least-privilege user `agent_ro`, then `answer` for the rest. */
 function agentReply(answer: (sql: string) => Reply): (sql: string) => Reply {
   return (sql) => {
+    if (sql.startsWith("SELECT name, readonly FROM system.settings")) {
+      return jsonReply(
+        [
+          "readonly",
+          "max_execution_time",
+          "max_result_rows",
+          "max_result_bytes",
+          "result_overflow_mode",
+          "timeout_overflow_mode",
+          "timeout_before_checking_execution_speed",
+          "max_threads",
+          "max_memory_usage",
+          "cancel_http_readonly_queries_on_client_close",
+        ].map((name) => ({ name, readonly: 1 })),
+      );
+    }
     if (sql === "SELECT 1") return jsonReply([{ "1": 1 }]);
     if (sql.startsWith("SELECT version() AS version, currentUser()")) {
       return jsonReply([{ version: "26.7.1.1315", user: "agent_ro", readonly: "1" }]);
@@ -4281,6 +4297,19 @@ async function readOnlyRefusal(run: Promise<unknown>): Promise<Error> {
 }
 
 describe("ClickHouseProvider agent read-only profile", () => {
+  test("a server byte-limit refusal does not invent an exceeded row count", async () => {
+    const provider = await agentProvider(() =>
+      exceptionReply(
+        396,
+        "TOO_MANY_ROWS_OR_BYTES",
+        "Limit for result exceeded, max bytes: 500.00 B, current bytes: 1000.00 B",
+        500,
+      ),
+    );
+    const error = await readOnlyRefusal(provider.queryReadOnly("SELECT payload FROM demo.orders", AGENT_BUDGET));
+    expect(error.message).toContain("byte budget");
+    expect(error.message).not.toContain("row budget");
+  });
   test("an ordinary editor handle refuses queryReadOnly and sends nothing", async () => {
     const provider = await connectProvider();
     sentSql = [];
@@ -4314,6 +4343,7 @@ describe("ClickHouseProvider agent read-only profile", () => {
       sqlWith("FROM system.tables"),
       "SELECT database, name FROM system.dictionaries LIMIT 1",
       sqlWith("FROM system.functions"),
+      sqlWith("FROM system.settings"),
     ]);
     for (const url of sentUrls.slice(1)) expect(new URL(url).searchParams.get("readonly")).toBe("1");
   });

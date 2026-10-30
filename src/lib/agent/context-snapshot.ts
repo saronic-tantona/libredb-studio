@@ -532,7 +532,11 @@ async function readInventory(context: AgentToolContext): Promise<AgentContextCap
   // No composed catalog for this dialect, which used to end the capture here with
   // "no schema inventory can be read for a mongodb connection". One can: the product
   // reads it every time the sidebar lists a table. See `captureFromProvider`.
-  if (plan === "unsupported") return captureFromProvider(context, nowMs);
+  if (
+    plan === "unsupported" ||
+    (plan.executionOnly && (context.mode !== "agent" || context.workflowType === "operations"))
+  )
+    return captureFromProvider(context, nowMs);
 
   const rows = new Map<AgentCatalogKind, readonly Record<string, unknown>[]>();
 

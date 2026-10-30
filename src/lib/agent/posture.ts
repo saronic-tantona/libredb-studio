@@ -34,7 +34,6 @@ import { AGENT_STATEMENT_LANGUAGE, type AgentStatementLanguageId } from "@/lib/a
 import { AGENT_EXECUTION_ENGINES, namedList } from "@/lib/agent/engine-support";
 import { AGENT_WORKFLOW_BUDGETS } from "@/lib/agent/execution-policy";
 import { languageClientPack } from "@/lib/agent/languages/client";
-import { enginesSupporting } from "@/lib/agent/languages/engines/client";
 import type { StatementBudgets } from "@/lib/agent/languages/pack";
 import type { AgentRunMode, AgentRunWorkflowType } from "@/lib/agent/types";
 import { getDBConfig } from "@/lib/db-ui-config";
@@ -58,18 +57,6 @@ export interface AgentPosture {
   /** The popover's text, and the whole claim. */
   readonly body: string;
 }
-
-/**
- * The dialects whose grounding capture is a COMPOSED CATALOG READ rather than a request that
- * the provider describe its own schema: the engines whose server `catalogCapture` is supplied.
- *
- * Read from the engines' client dialects rather than the server one, and for the reason this
- * module exists at all: the server dialect reaches the composed reads and the tool layer, so
- * importing it would put the agent's server tree behind a browser bundle. Each client overlay
- * is typed from its server overlay, so the two cannot disagree, and
- * `tests/unit/lib/agent/posture.test.ts` reads the server dialect to hold the copy to it.
- */
-const CATALOG_CAPTURE_ENGINES: readonly DatabaseType[] = enginesSupporting("catalogCapture");
 
 /**
  * The per-statement bounds agent mode runs under, taken from one policy row.
@@ -127,7 +114,7 @@ function planPosture(): AgentPosture {
     headline: "Executes nothing it drafts",
     qualifier: "one schema read grounds it, nothing else reaches the database",
     title: "Plan mode drafts, and never runs what it drafted",
-    body: `Plan mode never executes the statement it wrote, on any engine — production included. Its one reach is the schema capture that grounds it: metadata only, no data rows, and it is where the inventory in Run details came from. On ${engineNames(CATALOG_CAPTURE_ENGINES)} that capture is itself a catalog read; on every other engine it asks the provider to describe its own schema.`,
+    body: "Plan mode never executes the statement it wrote, on any engine — production included. Its one reach is the schema capture that grounds it: metadata only, no data rows, and it is where the inventory in Run details came from. The engine's capture policy selects catalog statements or the provider's schema inventory.",
   };
 }
 

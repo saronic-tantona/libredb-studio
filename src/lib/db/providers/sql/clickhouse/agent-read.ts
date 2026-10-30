@@ -35,7 +35,12 @@ export function agentRequestSettings(budget: ReadOnlyStatementBudget): Record<st
     readonly: 1,
     max_execution_time: Math.ceil(budget.statementTimeoutMs / MILLISECONDS_PER_SECOND),
     max_result_rows: budget.maxResultRows,
+    max_result_bytes: budget.maxResultBytes,
     result_overflow_mode: "throw",
+    timeout_overflow_mode: "throw",
+    timeout_before_checking_execution_speed: 0,
+    max_threads: 2,
+    max_memory_usage: 268435456,
     cancel_http_readonly_queries_on_client_close: 1,
   };
 }

@@ -133,6 +133,8 @@ export const DIGIT_RUN_LENGTH = 9;
  * shape tests, so an overlay needs nothing from this module but its types.
  */
 export interface AgentProfileComposition {
+  /** Scalar text types, including wrappers where needed. Absent: the shared SQL type test. */
+  readonly textualType?: RegExp;
   /** The shape tests, each over an already-quoted column reference, in this engine's spelling (see `PROFILE_SHAPES`). */
   readonly shapeTests: {
     readonly email: (quotedColumn: string, likePattern: string) => string;
@@ -307,7 +309,8 @@ function quoteTarget(dialect: DatabaseType, segments: readonly string[]): string
  */
 const decidableType = (column: ColumnSchema): string => column.baseType ?? column.type;
 
-const isTextual = (column: ColumnSchema): boolean => TEXTUAL_TYPE.test(decidableType(column));
+const isTextual = (column: ColumnSchema, composition: AgentProfileComposition): boolean =>
+  (composition.textualType ?? TEXTUAL_TYPE).test(decidableType(column));
 
 const isComparable = (column: ColumnSchema, composition: AgentProfileComposition): boolean =>
   !composition.incomparableType.test(decidableType(column));
@@ -363,7 +366,7 @@ export function composeTableProfile(
     if (selector.depth !== "basic" && isComparable(column, composition)) {
       parts.push(`count(DISTINCT ${quoted}) AS ${alias("distinct", index)}`);
     }
-    if (selector.depth === "pattern" && isTextual(column)) {
+    if (selector.depth === "pattern" && isTextual(column, composition)) {
       // Counted inside the database: the rows that matched are never returned.
       for (const shape of PROFILE_SHAPES) {
         const test = shape.test(composition.shapeTests, quoted);
