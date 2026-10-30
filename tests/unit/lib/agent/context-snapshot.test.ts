@@ -272,6 +272,36 @@ async function captured(type: DatabaseType): Promise<AgentContextSnapshot> {
   return capture.snapshot;
 }
 
+test("ClickHouse captures a wide table in bounded catalog reads without inventing unique keys", async () => {
+  const columns = Array.from({ length: 210 }, (_, i) => [i + 1, `c${i}`, "String", 0]);
+  const h = harness(
+    "clickhouse",
+    async (sql) =>
+      result(
+        sql.includes("system.columns")
+          ? [{ table_schema: "telem", table_name: "messages", relkind: "table", columns: JSON.stringify(columns) }]
+          : [
+              {
+                table_schema: "telem",
+                table_name: "messages",
+                index_name: "ORDER BY",
+                key_expression: "c0",
+                is_unique: false,
+              },
+            ],
+      ),
+    objectCapabilities,
+  );
+  const capture = await captureContextSnapshot({ ...h.context, statementLanguage: "sql" });
+  expect(capture.kind).toBe("captured");
+  if (capture.kind !== "captured") throw new Error(capture.detail);
+  expect(h.statements()).toHaveLength(2);
+  expect(h.statements()[0]).toContain("groupArray");
+  expect(capture.snapshot.objects[0].columns).toHaveLength(210);
+  expect(capture.snapshot.objects[0].indexes).toEqual([{ name: "ORDER BY", columns: ["c0"], unique: false }]);
+  expect(capture.snapshot.objects[0].foreignKeys).toEqual([]);
+});
+
 describe("captureContextSnapshot — PostgreSQL", () => {
   test("builds the inventory from the composed catalog reads, and from nothing else", async () => {
     const h = harness("postgres");
@@ -1283,6 +1313,23 @@ describe("captureContextSnapshot — the provider's own inventory", () => {
       profiles: () => profiles,
     };
   }
+
+  test.each(["planning", "operations"] as const)(
+    "ClickHouse %s retains provider grounding without acquiring statement credentials",
+    async (mode) => {
+      const h = providerHarness();
+      const capture = await captureContextSnapshot({
+        ...h.context,
+        connection: connectionOf("clickhouse"),
+        statementLanguage: "sql",
+        mode: mode === "planning" ? "planning" : "agent",
+        workflowType: mode === "operations" ? "operations" : "data-analysis",
+      });
+      expect(capture.kind).toBe("captured");
+      expect(h.profiles()).toEqual(["agent-operations"]);
+      expect(h.describeObjects).toHaveBeenCalled();
+    },
+  );
 
   test("PostgreSQL and SQLite do not converge on it, and record no route of their own", async () => {
     // The two paths are a deliberate asymmetry, and absence of `readVia` is what

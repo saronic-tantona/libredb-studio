@@ -2,11 +2,9 @@ import { describe, expect, mock, test } from "bun:test";
 import * as manifest from "@/lib/agent/agent-manifest";
 import { AGENT_EXECUTION_ENGINES, namedList } from "@/lib/agent/engine-support";
 import { AGENT_HANDOVER_BUDGET, AGENT_WORKFLOW_BUDGETS } from "@/lib/agent/execution-policy";
-import { engineServerDialect } from "@/lib/agent/languages/engines/server";
 import { agentPosture, autoExecuteTerms } from "@/lib/agent/posture";
 import type { AgentRunWorkflowType } from "@/lib/agent/types";
 import { getDBConfig } from "@/lib/db-ui-config";
-import type { DatabaseType } from "@/lib/types";
 
 /**
  * The rail's one-axis reading of what the selected mode does to the database.
@@ -33,21 +31,6 @@ const EXECUTION_ENGINE_NAMES = labelsOf(AGENT_EXECUTION_ENGINES);
 const WORKFLOW_TYPES = Object.keys(AGENT_WORKFLOW_BUDGETS) as AgentRunWorkflowType[];
 const STATEMENT_BUDGETS = AGENT_WORKFLOW_BUDGETS.investigation.policy.budgets;
 
-/**
- * The dialects whose grounding capture is a COMPOSED CATALOG READ: the engines whose server
- * `catalogCapture` is supplied, in `AGENT_STATEMENT_LANGUAGE` order.
- *
- * The server dialect is server tier, so a posture module that imported it would stop being
- * client-safe - which is the rule `engine-support.ts` records in its own header. So the
- * production module reads the client dialects, and this reads the real server one to keep
- * them honest: an engine that gains a `catalogCapture` fails this file until the copy names it.
- */
-function catalogPlanDialects(): string[] {
-  return (Object.keys(manifest.AGENT_STATEMENT_LANGUAGE) as DatabaseType[]).filter(
-    (type) => engineServerDialect(type).catalogCapture !== "unsupported",
-  );
-}
-
 describe("agentPosture in plan mode", () => {
   test("reads the same on every engine, and says what its one reach is", () => {
     const posture = agentPosture({
@@ -62,15 +45,15 @@ describe("agentPosture in plan mode", () => {
     expect(posture.qualifier).toBe("one schema read grounds it, nothing else reaches the database");
     expect(posture.title).toBe("Plan mode drafts, and never runs what it drafted");
     expect(posture.body).toBe(
-      `Plan mode never executes the statement it wrote, on any engine — production included. Its one reach is the schema capture that grounds it: metadata only, no data rows, and it is where the inventory in Run details came from. On ${labelsOf(catalogPlanDialects())} that capture is itself a catalog read; on every other engine it asks the provider to describe its own schema.`,
+      "Plan mode never executes the statement it wrote, on any engine — production included. Its one reach is the schema capture that grounds it: metadata only, no data rows, and it is where the inventory in Run details came from. The engine's capture policy selects catalog statements or the provider's schema inventory.",
     );
   });
 
-  test("the engines named as capturing by a catalog read are PostgreSQL and SQLite, written out", () => {
+  test("planning describes the engine's capture policy without promising the agent execution profile", () => {
     // The literal beside the derived one above: the mirror and its source could move together.
     const posture = agentPosture({ mode: "planning", engine: null, engineLabel: "", handover: false });
 
-    expect(posture.body).toContain("On PostgreSQL and SQLite that capture is itself a catalog read");
+    expect(posture.body).toContain("capture policy selects catalog statements or the provider's schema inventory");
   });
 
   test("an engine agent mode cannot execute on gets the identical plan posture", () => {

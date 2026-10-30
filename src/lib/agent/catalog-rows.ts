@@ -40,6 +40,8 @@ export type ComposedKindResolver = (word: unknown) => string | undefined;
  * composed snapshot, which is the safe direction.
  */
 export interface AgentCatalogCapture {
+  /** Use composed reads only for statement workflows; Plan and Operate keep provider inventory reads. */
+  readonly executionOnly?: boolean;
   /** The catalog kinds read, in order: the statement order, and so the fingerprint and the ledger bytes. */
   readonly kinds: readonly AgentCatalogKind[];
   readonly build: (rows: CatalogRows, kindOf: ComposedKindResolver) => TableIndex;

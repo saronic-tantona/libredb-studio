@@ -142,7 +142,7 @@ spellings in `src/lib/llm/utils/gemini-endpoint.ts`. Give the versioned URL; a b
   exhaustive, and on the document engines it infers a table's fields from a **sample of your own
   documents** — no value from them is kept, but the existence of a field there is derived from data
   rather than read from a catalog, and the prompt says so. The estimated statistics are read on
-  PostgreSQL and SQLite only; everywhere else the run is told plainly that this engine holds none it
+  PostgreSQL, SQLite, libSQL, SQL Server and ClickHouse; on engines without a statistics reader the run is told plainly that it holds none it
   knows how to read. A run whose reading is refused, overruns its time, or meets a provider that
   cannot describe itself is told THAT, and has no inventory. Nothing is written, and every statement a
   plan drafts is handed to you to run yourself.
@@ -287,13 +287,15 @@ than refused on its dialect, so this reduced inventory leaves on those engines t
 cannot be taken at all — a provider that cannot describe itself, a description that overran its time,
 a refusal — nothing of the schema leaves and a server-written note says so in its place.
 
-**Two readings produce it, and which one runs is the dialect's decision** (#414). On PostgreSQL and
+ClickHouse statement workflows use composed capture: two bounded reads return aggregated columns and key expressions. Its Plan and Operate workflows retain provider capture. The forty-one-provider count below describes Plan mode; ClickHouse statement workflows use the execution profile instead. See [the ClickHouse agent language pack](providers/clickhouse.md#agent-language-pack).
+
+**Two readings produce it, and which one runs is the dialect and workflow's decision** (#414). In Plan mode, on PostgreSQL and
 SQLite the server composes a catalog statement per kind and executes it read-only. On the other
 forty-one it invokes `db.schema.read`, which walks the connection's own OBJECT SURFACE, the same
 `listContainers`, `countObjects`, `listObjects` and `describeObjects` the sidebar walks when it lists
 your objects, and composes no statement at all.
 **Forty-one counts type-ids the factory can build, not engines a user would name**: `SHIPPED` holds
-forty-three, two of them supply a `catalogCapture`, and the remainder is what this second reading covers.
+forty-three, two of them use `catalogCapture` in Plan mode, and the remainder is what this second reading covers.
 Every other count said about grounding in these docs counts the same thing. libSQL is one of the
 forty-one and not one of the two: it speaks SQLite's dialect, but the read-only catalog path
 a `catalogCapture` takes needs a database-native read-only profile, and `PRAGMA query_only` is refused

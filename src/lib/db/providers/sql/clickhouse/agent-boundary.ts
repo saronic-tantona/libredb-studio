@@ -50,6 +50,7 @@
  *    so a row policy an operator sets on it can hide a function from it.
  */
 import { ExecutionProfileError } from "@/lib/db/errors";
+import { agentRequestSettings } from "./agent-read";
 import { type ClickHouseQueryResult, ClickHouseTransportError } from "./transport";
 
 /** Runs one statement under the agent's request settings and answers it, or throws the seam's error. */
@@ -493,4 +494,16 @@ export async function verifyAgentProfile(query: AgentProofQuery, database: strin
   await verifyQueryLogUnreadable(query, user);
   await verifyNoExternalObject(query, user);
   await verifyNoExecutableFunction(query, user);
+  const names = Object.keys(agentRequestSettings({ statementTimeoutMs: 1000, maxResultRows: 1, maxResultBytes: 1 }));
+  const settings = await query(
+    `SELECT name, readonly FROM system.settings WHERE name IN (${names.map(stringLiteral).join(", ")})`,
+  );
+  if (
+    settings.rawText !== null ||
+    !names.every((name) => settings.rows.some((row) => row.name === name && Number(row.readonly) === 1))
+  ) {
+    throw unenforced(
+      "ClickHouse did not lock the agent's query limits; remove CHANGEABLE_IN_READONLY overrides from its settings profile",
+    );
+  }
 }

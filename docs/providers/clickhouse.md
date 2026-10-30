@@ -909,11 +909,16 @@ The proof runs in `connect()` only when the context sets both `readOnly` and `se
 | `readonly` | `1`, never `2` | `2` lets a statement change settings; under `1` a trailing `SETTINGS` of any setting answers `164`, `readonly` and `max_result_rows` included |
 | `max_execution_time` | the budget's milliseconds in whole seconds, rounded up | the server's own deadline, `159` past it; the transport's client deadline ends the wait at the budget itself |
 | `max_result_rows` | the row budget | with `result_overflow_mode = throw` the server refuses a result past it with `396`: 10 rows under a bound of 10 answer, 11 are refused |
+| `max_result_bytes` | the byte budget | stop oversized results in the server as well as the transport |
 | `result_overflow_mode` | `throw` | refuse rather than cut |
+| `timeout_overflow_mode` | `throw` | refuse partial results at the deadline |
+| `timeout_before_checking_execution_speed` | `0` | check the deadline without the default startup delay |
+| `max_threads` | `2` | bound query concurrency |
+| `max_memory_usage` | `268435456` | bound query memory to 256 MiB |
 | `cancel_http_readonly_queries_on_client_close` | `1` | a request the client abandons, at its deadline or at the body cap, is cancelled on the server: measured, the abandoned statement left `system.processes` with the setting, and was still running 3 s later without it |
 
 The transport reads the answer in chunks and stops at the byte budget plus a 1 MiB envelope allowance (`maxBodyBytes`), so an oversized answer is never held whole.
-The parsed rows are then held to the row and byte budgets again, and every refusal is the shared sentence of [`read-only-budget.ts`](../../src/lib/db/providers/sql/read-only-budget.ts).
+The parsed rows are then held to the row and byte budgets again, using the shared sentences of [`read-only-budget.ts`](../../src/lib/db/providers/sql/read-only-budget.ts). A server byte-limit refusal names the byte budget instead of claiming that a row limit was exceeded.
 An answer in a format the statement chose (`FORMAT TSV`) is refused, because its rows cannot be counted or measured.
 An estimating plan is the `EXPLAIN json = 1, indexes = 1` prefix the agent composes, sent in the ordinary execute mode; the estimate-plan session mode is refused.
 The run read allowance is not charged: ClickHouse does not bill per read.
@@ -929,6 +934,7 @@ Each step runs under the request settings above, and any answer the proof cannot
 5. `SELECT 1 FROM system.query_log LIMIT 0` must answer `497`, or `60` where the log is off: the query log holds every user's statements.
 6. `system.tables` must show the user no table outside the local engines (`CLICKHOUSE_LOCAL_TABLE_ENGINES`: the MergeTree family, `Memory`, the log engines, `Null`, `Set`, `Join` and the two view engines), and no view or materialized view whose SQL SECURITY is `DEFINER` or `NONE`. `system.dictionaries` must be unreadable to it (`497`) or empty. Every other engine 26.7 lists is in `CLICKHOUSE_REFUSED_TABLE_ENGINES`, and the two lists are held to cover 26.7's `system.table_engines` exactly.
 7. `system.functions` must list no function whose `origin` is neither `System` nor `SQLUserDefined`, and one that does is refused `PROFILE_PRIVILEGES_TOO_BROAD` by name. An executable function declared in the server's configuration (`user_defined_executable_functions_config`, listed with origin `ExecutableUserDefined`, `executable` and `executable_pool` alike) needs no grant to call, and `readonly = 1` does not refuse it: the least-privilege user called one and its program ran. A WebAssembly function (`WasmUserDefined`) and an origin a later release adds are refused the same way.
+8. `system.settings` must mark every agent request setting read-only. Missing settings and `CHANGEABLE_IN_READONLY` overrides refuse the profile with `PROFILE_SERVER_UNENFORCED`.
 
 The check is of what `system.tables` shows, so a `SHOW TABLES` grant that makes a URL-engine table visible refuses the user even without `SELECT` on it.
 The proof runs at open only: a grant added to the user after the open is seen at the next open of a profiled handle, not before.
@@ -948,6 +954,7 @@ GRANT SELECT ON demo.orders, SELECT ON demo.customers TO libredb_agent;
 
 Grant `SELECT` per table, or per database where every table in it uses a local engine; a database holding a URL-engine table, a dictionary or a definer view refuses a user who can see it.
 A server that declares an executable function refuses every agent user, since no grant governs the call.
+The account's default profile must permit the per-request settings, normally with default `readonly=0`. A default `readonly=2` cannot be tightened to `1` per request. The SELECT-only grants still restrict ordinary editor requests.
 Grant the `SELECT` to the user itself: a user whose only `SELECT` comes through a role that is not a default role is admitted, because `SHOW GRANTS FINAL` lists the role's grants, but its reads answer `497`, since the role is not active.
 
 #### What only the fence or the operator stops
@@ -1005,16 +1012,44 @@ The agent reads it through `runServerPack` and `agentEnginePack`, and the dialec
 | --- | --- | --- |
 | `catalogRead` | Dialect-bound | Supplied |
 | `planEstimate` | Dialect-bound | Supplied |
-| `profileComposition` | Dialect-bound | `"unsupported"` |
-| `statistics` | Dialect-bound | `"unsupported"` |
-| `catalogCapture` | Dialect-bound | `"unsupported"` |
+| `profileComposition` | Dialect-bound | Supplied |
+| `statistics` | Dialect-bound | Supplied |
+| `catalogCapture` | Dialect-bound | Supplied |
 
 This overlay overrides no Shared member, so every Shared member is the `sql` statement-language family's own.
 The catalog read takes `system.columns` and `system.tables`, which the server filters to what the user may see; the index kind is each table's primary and sorting key, since `system.data_skipping_indices` answers the least-privilege user `497`, and the relation kind is always empty, since ClickHouse keeps no foreign key.
 Each kind was run as the least-privilege user under `readonly = 1`.
-`profile_table` is still offered here and answers `UNSUPPORTED_DIALECT`, and `compare_plans` reads every plan as `unknown`, because the `clickhouse-json` strategy has no agent reading (B140).
+`profile_table` returns counts at basic, distribution and pattern depths. String patterns apply only to scalar String and FixedString columns, including Nullable and LowCardinality wrappers. Arrays do not receive string predicates. JSON, Object, Dynamic, Variant and AggregateFunction columns omit distinct counts. Profiles return counts rather than sample values.
+
+Statement workflows capture schema through two bounded catalog reads: one aggregated column row per object, then primary and sorting key expressions. These keys are not unique constraints. The statistics reading preserves unknown `total_rows` as unknown. Plan and Operate retain provider inventory reads and their existing credential requirements; they do not acquire the agent statement profile for this capture.
+
+`compare_plans` still reads every plan as `unknown`, because the `clickhouse-json` strategy has no agent reading (B140).
 A pack does not open agent mode: execution is gated by `AGENT_EXECUTION_ENGINES` and the execution-profile check.
 MCP's statement read stays closed on ClickHouse (`MCP_STATEMENT_READ.clickhouse` is false) until a change of its own opens it.
+
+#### Analysis acceptance check
+
+The analysis check uses a disposable ClickHouse 26.7.1.1315 server. Create this fixture as its administrator:
+
+```sql
+CREATE DATABASE telem;
+CREATE TABLE telem.messages (
+  host LowCardinality(Nullable(String)), received_at DateTime64(3, 'UTC'),
+  tags Array(String), payload JSON
+) ENGINE=MergeTree ORDER BY received_at;
+INSERT INTO telem.messages VALUES
+  ('boat-a','2026-10-29 19:30:00',['alpha'],'{}'),
+  ('sim-boat-b','2026-10-29 19:45:00',['beta'],'{}'),
+  ('boat-old','2026-10-29 17:00:00',[],'{}');
+CREATE USER agent IDENTIFIED BY 'fixture-password' SETTINGS readonly=0;
+GRANT SELECT ON telem.* TO agent;
+CREATE USER planner IDENTIFIED BY 'fixture-password' SETTINGS readonly=2;
+GRANT SELECT ON telem.* TO planner;
+GRANT SELECT(database, name) ON system.dictionaries TO planner;
+GRANT SELECT(database, table, name, expr) ON system.data_skipping_indices TO planner;
+```
+
+From the repository root, run `CLICKHOUSE_ANALYSIS_PORT=<loopback HTTP port> bun tests/live/clickhouse-agent-analysis.ts`. The check reads the fixture and verifies schema capture, profiling, statistics, EXPLAIN, the fixed-hour telemetry answer, write denial, and query limits. It also checks Plan mode with the separate `readonly=2` fixture account. This check passed on October 30, 2026. It does not verify model behavior or authorize a production rollout.
 
 ## 6. Schema introspection
 

@@ -316,9 +316,9 @@ describe("engineServerDialect", () => {
     expect(engineServerOverlay("postgres").dialect).toBe(engineServerDialect("postgres"));
   });
 
-  test("profileComposition is supplied on exactly the five verified engines, and DuckDB declares it unsupported (B111)", () => {
+  test("profileComposition is supplied on the verified engines, and DuckDB declares it unsupported (B111)", () => {
     const supplied = SQL_ENGINES.filter((type) => engineServerDialect(type).profileComposition !== "unsupported");
-    expect(supplied).toEqual(["postgres", "mysql", "sqlite", "libsql", "mssql"]);
+    expect(supplied).toEqual(["postgres", "mysql", "sqlite", "libsql", "mssql", "clickhouse"]);
     expect(engineServerDialect("duckdb").profileComposition).toBe("unsupported");
     const counted = supplied.filter((type) => {
       const composition = engineServerDialect(type).profileComposition;
@@ -415,12 +415,11 @@ describe("engineServerDialect", () => {
     expect(postgres.retry?.matches("permission denied for table orders")).toBe(false);
     expect(postgres.retry?.rewrite).toBe(POSTGRES.withoutExtensionOwnershipTest);
   });
-  test("statistics is supplied on PostgreSQL, SQLite, SQL Server and libSQL, and only SQLite and libSQL probe first or note a limit", () => {
+  test("statistics includes ClickHouse, and only SQLite and libSQL probe first or note a limit", () => {
     const supplied = SQL_ENGINES.filter((type) => engineServerDialect(type).statistics !== "unsupported");
-    expect(supplied).toEqual(["postgres", "sqlite", "libsql", "mssql"]);
+    expect(supplied).toEqual(["postgres", "sqlite", "libsql", "mssql", "clickhouse"]);
     expect(engineServerDialect("duckdb").statistics).toBe("unsupported");
     expect(engineServerDialect("mysql").statistics).toBe("unsupported");
-    expect(engineServerDialect("clickhouse").statistics).toBe("unsupported");
     expect(engineServerDialect("influxdb3").statistics).toBe("unsupported");
     expect(engineServerDialect("elasticsearch").statistics).toBe("unsupported");
     expect(engineServerDialect("opensearch").statistics).toBe("unsupported");
@@ -434,13 +433,14 @@ describe("engineServerDialect", () => {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'",
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'",
       null,
+      null,
     ]);
     expect(supplied.filter((type) => reading(type).limitNote !== undefined)).toEqual(["sqlite", "libsql"]);
     for (const type of supplied) {
       expect(Object.isFrozen(reading(type))).toBe(true);
       expect(typeof reading(type).build).toBe("function");
     }
-    expect(new Set(supplied.map((type) => reading(type).build)).size).toBe(4);
+    expect(new Set(supplied.map((type) => reading(type).build)).size).toBe(5);
   });
 
   test("an engine that reads statistics also reads its catalog, since the statistics read is a catalog kind", () => {
@@ -450,14 +450,13 @@ describe("engineServerDialect", () => {
     }
   });
 
-  test("catalogCapture is supplied on PostgreSQL and SQLite, each with its own kinds, builder and kind words", () => {
+  test("catalogCapture is supplied on PostgreSQL, SQLite and ClickHouse with engine-owned builders", () => {
     const supplied = SQL_ENGINES.filter((type) => engineServerDialect(type).catalogCapture !== "unsupported");
-    expect(supplied).toEqual(["postgres", "sqlite"]);
+    expect(supplied).toEqual(["postgres", "sqlite", "clickhouse"]);
     for (const type of [
       "duckdb",
       "mssql",
       "mysql",
-      "clickhouse",
       "libsql",
       "influxdb3",
       "elasticsearch",
@@ -473,6 +472,8 @@ describe("engineServerDialect", () => {
     };
     expect(capture("postgres").kinds).toEqual(["columns", "relations", "indexes"]);
     expect(capture("sqlite").kinds).toEqual(["columns", "indexes"]);
+    expect(capture("clickhouse").kinds).toEqual(["columns", "indexes"]);
+    expect(capture("clickhouse").executionOnly).toBe(true);
     expect(capture("postgres").kindWords).toEqual({
       r: "table",
       p: "table",
@@ -514,7 +515,7 @@ describe("the client dialect", () => {
       sqlite: { catalogRead: "supported", planEstimate: "supported", catalogCapture: "supported" },
       duckdb: { catalogRead: "supported", planEstimate: "supported", catalogCapture: "unsupported" },
       mssql: { catalogRead: "supported", planEstimate: "supported", catalogCapture: "unsupported" },
-      clickhouse: { catalogRead: "supported", planEstimate: "supported", catalogCapture: "unsupported" },
+      clickhouse: { catalogRead: "supported", planEstimate: "supported", catalogCapture: "supported" },
       elasticsearch: { catalogRead: "supported", planEstimate: "unsupported", catalogCapture: "unsupported" },
       opensearch: { catalogRead: "supported", planEstimate: "unsupported", catalogCapture: "unsupported" },
       oracle: { catalogRead: "supported", planEstimate: "unsupported", catalogCapture: "unsupported" },
@@ -550,9 +551,9 @@ describe("the client dialect", () => {
     expect(composers).toEqual(["postgres", "sqlite", "duckdb", "mssql", "mysql", "clickhouse", "libsql", "influxdb3"]);
     expect(Object.isFrozen(composers)).toBe(true);
     const capture = enginesSupporting("catalogCapture");
-    expect(capture).toEqual(["postgres", "sqlite"]);
+    expect(capture).toEqual(["postgres", "sqlite", "clickhouse"]);
     expect(Object.isFrozen(capture)).toBe(true);
-    expect(enginesSupporting("catalogRead", "catalogCapture")).toEqual(["postgres", "sqlite"]);
+    expect(enginesSupporting("catalogRead", "catalogCapture")).toEqual(["postgres", "sqlite", "clickhouse"]);
   });
 });
 

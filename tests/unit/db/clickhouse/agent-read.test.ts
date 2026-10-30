@@ -48,7 +48,12 @@ describe("agentRequestSettings", () => {
       readonly: 1,
       max_execution_time: 3,
       max_result_rows: 3,
+      max_result_bytes: 200,
       result_overflow_mode: "throw",
+      timeout_overflow_mode: "throw",
+      timeout_before_checking_execution_speed: 0,
+      max_threads: 2,
+      max_memory_usage: 268435456,
       cancel_http_readonly_queries_on_client_close: 1,
     });
   });

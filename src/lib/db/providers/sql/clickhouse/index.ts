@@ -888,6 +888,9 @@ export class ClickHouseProvider extends SQLBaseProvider {
           throw new QueryError(byteBudgetSentence(error.bytesRead, budget.maxResultBytes), this.type, sql);
         }
         if (error instanceof ClickHouseTransportError && error.code === TOO_MANY_ROWS_OR_BYTES) {
+          if (error.message.includes("max bytes:")) {
+            throw new QueryError("Read-only execution exceeded the result byte budget", this.type, sql);
+          }
           throw rowOverflowRefusal(error.message, budget, sql);
         }
         throw this.mapClickHouseError(error, sql);

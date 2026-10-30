@@ -5,8 +5,7 @@
  * The catalog is read from `system.columns` and `system.tables`, which ClickHouse filters to what the user may see,
  * so the least-privilege agent user reads them with no grant of its own; `system.data_skipping_indices`, the one
  * catalog table the index read could add, answers that user 497 without a grant on it (all measured on 26.7.1.1315
- * as the least-privilege user under `readonly = 1`). The profile composition, the statistics reading and the
- * grounding capture have no composition measured on this engine, and stay unsupported.
+ * as the least-privilege user under `readonly = 1`). Profiles and composed capture use these same restricted reads.
  */
 import {
   type AgentCatalogRead,
@@ -15,6 +14,73 @@ import {
   equalsClause,
 } from "../../../composed-sql-primitives";
 import type { AgentEngineServerOverlay, SqlServerDialect } from "../../pack";
+import type { AgentProfileComposition } from "../../../table-profile";
+import {
+  numeric,
+  qualified,
+  text,
+  attach,
+  emptyTable,
+  type AgentCatalogCapture,
+  type TableIndex,
+} from "../../../catalog-rows";
+import type { AgentStatisticsReading } from "../../../schema-stats";
+
+const CLICKHOUSE_STATISTICS = Object.freeze<AgentStatisticsReading>({
+  probe: null,
+  build: (rows) =>
+    new Map(
+      rows.map((row) => [
+        qualified(row.table_schema, row.table_name),
+        { estimatedRows: numeric(row.estimated_rows), columns: [] },
+      ]),
+    ),
+});
+
+/** Invalid catalog data is refused instead of producing an incomplete schema snapshot. */
+function columnsFrom(value: unknown) {
+  const columns: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  if (!Array.isArray(columns)) throw new Error("ClickHouse catalog columns must be an array");
+  return columns.map((column: unknown) => {
+    if (!Array.isArray(column) || typeof column[1] !== "string" || typeof column[2] !== "string")
+      throw new Error("ClickHouse catalog column is malformed");
+    return {
+      name: column[1],
+      type: column[2],
+      nullable: /^(?:LowCardinality\()?Nullable\(/.test(column[2]),
+      // A ClickHouse sparse primary key does not enforce uniqueness.
+      isPrimary: false,
+    };
+  });
+}
+
+const CLICKHOUSE_CATALOG_CAPTURE = Object.freeze<AgentCatalogCapture>({
+  executionOnly: true,
+  kinds: Object.freeze(["columns", "indexes"] as const),
+  kindWords: Object.freeze({ table: "table", view: "view", materialized_view: "materialized_view" }),
+  build: (rows, kindOf) => {
+    const tables: TableIndex = new Map();
+    for (const row of rows.get("columns") ?? []) {
+      const name = qualified(row.table_schema, row.table_name);
+      tables.set(name, { ...emptyTable(name), kind: kindOf(row.relkind), columns: columnsFrom(row.columns) });
+    }
+    for (const row of rows.get("indexes") ?? []) {
+      attach(tables, qualified(row.table_schema, row.table_name), (table) => {
+        table.indexes.push({ name: text(row.index_name), columns: [text(row.key_expression)], unique: false });
+      });
+    }
+    return tables;
+  },
+});
+
+const CLICKHOUSE_PROFILE_COMPOSITION: AgentProfileComposition = Object.freeze({
+  shapeTests: Object.freeze({
+    email: (quoted: string, pattern: string) => `${quoted} LIKE '${pattern}'`,
+    digitRun: (quoted: string, length: number) => `match(${quoted}, '[0-9]{${length},}')`,
+  }),
+  textualType: /^(?:(?:Nullable|LowCardinality)\()*(?:String|FixedString\(\d+\))\)*$/i,
+  incomparableType: /\b(?:JSON|Object|Dynamic|Variant|AggregateFunction)\b/i,
+});
 
 /**
  * The estimating plan, the one the editor's EXPLAIN asks for (`clickhouse-json.ts`): ClickHouse's EXPLAIN describes a
@@ -30,18 +96,19 @@ const CLICKHOUSE_PLAN_ESTIMATE: AgentPlanEstimate = Object.freeze({
 const CLICKHOUSE_SCHEMA_EXCLUSION = "database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')";
 
 /**
- * The column inventory, one row per column, in each table's own column order. `data_type` is the type verbatim, its
- * `Nullable` and `LowCardinality` wrappers included, and `is_nullable` reads the wrapper, since ClickHouse has no
- * separate nullability flag.
+ * One row per object keeps wide tables within the result row budget. Each tuple holds position, name, type and key
+ * membership in column order. Types retain their Nullable and LowCardinality wrappers.
  */
 function composeClickhouseColumns(selector: AgentCatalogSelector): string {
   return (
-    "SELECT database AS table_schema, table AS table_name, name AS column_name, type AS data_type, " +
-    "type LIKE 'Nullable(%' OR type LIKE 'LowCardinality(Nullable(%' AS is_nullable, position AS ordinal_position " +
-    `FROM system.columns WHERE ${CLICKHOUSE_SCHEMA_EXCLUSION}` +
-    equalsClause("database", selector.schema, "schema", "clickhouse") +
-    equalsClause("table", selector.table, "table", "clickhouse") +
-    " ORDER BY database, table, position"
+    "SELECT c.database AS table_schema, c.table AS table_name, " +
+    "multiIf(t.engine = 'View', 'view', t.engine = 'MaterializedView', 'materialized_view', 'table') AS relkind, " +
+    "toJSONString(arraySort(x -> x.1, groupArray(tuple(c.position, c.name, c.type, c.is_in_primary_key)))) AS columns " +
+    "FROM system.columns c INNER JOIN system.tables t ON t.database = c.database AND t.name = c.table " +
+    "WHERE c.database NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')" +
+    equalsClause("c.database", selector.schema, "schema", "clickhouse") +
+    equalsClause("c.table", selector.table, "table", "clickhouse") +
+    " GROUP BY c.database, c.table, t.engine ORDER BY c.database, c.table"
   );
 }
 
@@ -110,9 +177,8 @@ export const CLICKHOUSE_SERVER_OVERLAY = {
   dialect: Object.freeze({
     catalogRead: CLICKHOUSE_CATALOG_READ,
     planEstimate: CLICKHOUSE_PLAN_ESTIMATE,
-    // No verified profile composition, so `profile_table` refuses with `UNSUPPORTED_DIALECT`.
-    profileComposition: "unsupported",
-    statistics: "unsupported",
-    catalogCapture: "unsupported",
+    profileComposition: CLICKHOUSE_PROFILE_COMPOSITION,
+    statistics: CLICKHOUSE_STATISTICS,
+    catalogCapture: CLICKHOUSE_CATALOG_CAPTURE,
   } satisfies SqlServerDialect),
 } as const satisfies AgentEngineServerOverlay<"sql">;

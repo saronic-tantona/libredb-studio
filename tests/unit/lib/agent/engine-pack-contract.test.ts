@@ -58,7 +58,6 @@ const DIALECT_MEMBER_OF: Readonly<Record<(typeof ARMED_TOOLS)[number], keyof Age
  */
 const UNSERVED_OFFERS: Readonly<Partial<Record<DatabaseType, readonly AgentToolName[]>>> = {
   duckdb: ["profile_table"],
-  clickhouse: ["profile_table"],
   influxdb3: ["profile_table"],
   // The catalog-only workflows open on Elasticsearch and offer both; it composes no estimating plan and no profile.
   elasticsearch: ["inspect_plan", "profile_table"],

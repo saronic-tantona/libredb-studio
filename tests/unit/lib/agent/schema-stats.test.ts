@@ -67,6 +67,33 @@ function result(rows: readonly Record<string, unknown>[]): QueryResult {
 
 const frozenClock = () => 1_000;
 
+test("ClickHouse retains unknown table counts and reads planning statistics through the operations profile", async () => {
+  const h = harness("clickhouse", async () =>
+    result([
+      { table_schema: "telem", table_name: "messages", estimated_rows: "4" },
+      { table_schema: "telem", table_name: "unknown", estimated_rows: null },
+    ]),
+  );
+  const statistics = await readSchemaStatistics(h.context);
+  expect(statistics.kind).toBe("read");
+  if (statistics.kind !== "read") throw new Error("statistics missing");
+  expect(statistics.byTable.get("telem.messages")).toEqual({ estimatedRows: 4, columns: [] });
+  expect(statistics.byTable.get("telem.unknown")).toEqual({ estimatedRows: null, columns: [] });
+  expect(h.methods()).toEqual(["query"]);
+  expect(h.profiles()).toEqual(["agent-operations"]);
+});
+
+test("ClickHouse statistics stay in the execution profile when a SQL run omits its default language", async () => {
+  const h = harness(
+    "clickhouse",
+    async () => result([{ table_schema: "telem", table_name: "messages", estimated_rows: "3" }]),
+    "agent",
+  );
+  expect((await readSchemaStatistics(h.context)).kind).toBe("read");
+  expect(h.methods()).toEqual(["queryReadOnly"]);
+  expect(h.profiles()).toEqual(["agent-read-only"]);
+});
+
 interface Harness {
   readonly context: AgentToolContext;
   readonly artifacts: ExecutionArtifactStore<QueryResult>;

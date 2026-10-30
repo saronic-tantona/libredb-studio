@@ -2471,9 +2471,11 @@ export function groundsUnderExecutionProfile(context: AgentToolContext): boolean
  * write probe to find out, on a run that is documented to run no statement of the user's and to write nothing.
  */
 function groundingStatementsUnderExecutionProfile(context: AgentToolContext): boolean {
+  const capture = engineServerDialect(context.connection.type).catalogCapture;
   return (
     groundsUnderExecutionProfile(context) ||
-    engineServerDialect(context.connection.type).catalogCapture !== "unsupported"
+    (capture !== "unsupported" &&
+      (!capture.executionOnly || (context.mode === "agent" && context.workflowType !== "operations")))
   );
 }
 
